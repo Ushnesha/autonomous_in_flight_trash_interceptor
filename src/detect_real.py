@@ -17,7 +17,7 @@ class RealDetector:
         self.max_object_pixels = 3000      # But not more than 3000
         
         # Distance filter
-        self.MIN_DEPTH = 0.3
+        self.MIN_DEPTH = 0.15
         self.MAX_DEPTH = 2.0
         
         print("[DETECT] === BACKGROUND SUBTRACTION DETECTOR ===")
@@ -61,7 +61,7 @@ class RealDetector:
         # 2. Binary Masking (The "Sweet Spot")
         # We only care about objects that are in front of the background 
         # but not closer than 0.3m (too close to lens)
-        mask = (diff > 0.05) & (depth_frame > self.MIN_DEPTH) & (depth_frame < self.MAX_DEPTH)
+        mask = (diff > 0.03) & (depth_frame > self.MIN_DEPTH) & (depth_frame < self.MAX_DEPTH)
         
         # 3. Clean up noise (Morphological Opening)
         # This removes tiny 1-2 pixel noise "speckles"
@@ -75,9 +75,9 @@ class RealDetector:
             # Find the largest blob (assumed to be the ball)
             sizes = ndimage.sum(mask, labeled, range(num_features + 1))
             max_label = np.argmax(sizes)
-            
             # Check if the largest blob is within size constraints (e.g., 50 to 500 pixels)
-            if 40 < sizes[max_label] < 800:
+            if 40 < sizes[max_label] < 1500:
+                print(f"[DEBUG] Found blob: size={sizes[max_label]} pixels")
                 # Get center of mass of the largest blob
                 coords = ndimage.center_of_mass(mask, labeled, max_label)
                 cy, cx = coords
@@ -95,3 +95,9 @@ class RealDetector:
             return "ready"
         else:
             return f"calibrating {len(self.bg_frames)}/{self.CALIB_FRAMES}"
+
+    def reset_calibration(self):
+        self.bg = None
+        self.bg_frames = []
+        self.calibrated = False
+        print("[DETECT] Recalibrating background for next throw...")

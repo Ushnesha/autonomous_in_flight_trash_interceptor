@@ -25,6 +25,7 @@ class RealMotors:
         self._integral = 0.0
         self._prev_err = None
         self._ppm_x = settings.FRAME_WIDTH / settings.ARENA_W
+        self.smooth_target_px = settings.FRAME_WIDTH / 2
         self.current_m = 0.0
 
         self.front_left  = Motor(forward=19, backward=26)
@@ -59,7 +60,9 @@ class RealMotors:
 
     def move_to_x(self, target_x_pixels):
         """Move can to target X position using PID control with position estimation"""
-        self._target_px = target_x_pixels
+        self.smooth_target_px = (0.7 * self.smooth_target_px) + (0.3 * target_x_pixels)
+        self._target_px = self.smooth_target_px
+        # self._target_px = target_x_pixels
         S = self.S
         dt = S.SIM_TIMESTEP
 
@@ -68,7 +71,7 @@ class RealMotors:
         self.current_m += self._vx * dt 
 
         """# 2. Convert pixel target to meters relative to center"""
-        target_m = (target_x_pixels / self._ppm_x) - S.ARENA_W / 2
+        target_m = (self._target_px / self._ppm_x) - S.ARENA_W / 2
         error = target_m - self.current_m
 
         """# 3. DEADZONE: Stop if we are within the tolerance"""
@@ -105,6 +108,10 @@ class RealMotors:
 
         self._vx = cmd
         self._apply_velocity(self._vx)
+
+        print(f"[DEBUG] Target_Px: {self._target_px:.1f} | Est_Pos_M: {self.current_m:.3f}m | Error_M: {error:.3f}m")
+
+
     def _apply_velocity(self, velocity):
         """Convert velocity to motor commands with a minimum power floor"""
         max_speed = self.S.CAN_MAX_SPEED
@@ -116,7 +123,7 @@ class RealMotors:
         # If we want to move, we MUST provide at least ~35% power
         # otherwise the motors won't overcome friction.
         if abs(velocity) > 0.02:
-            duty = max(0.35, min(1.0, base_duty))
+            duty = max(0.25, min(1.0, base_duty))
         else:
             duty = 0.0
 
@@ -131,7 +138,7 @@ class RealMotors:
             direction = "STOP"
             duty = 0.0
 
-        print(f"[MOTOR] {direction} velocity={velocity:.2f} duty={duty:.2f}")
+        print(f"[MOTOR] {direction} | Raw_Cmd_Vel: {velocity:.3f} | Final_Duty: {duty:.2f}")
 
     def center(self):
         self._vx = 0.0

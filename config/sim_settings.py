@@ -12,8 +12,8 @@ class SimSettings:
     FPS      = 60
 
     # ── Real-world arena (meters) ─────────────────────────────────
-    ARENA_W  = 3.0
-    ARENA_H  = 2.5
+    ARENA_W  = 1.5
+    ARENA_H  = 1.0
 
     # ── ArduCAM TOF Camera ────────────────────────────────────────
     FRAME_WIDTH  = 320
@@ -22,14 +22,14 @@ class SimSettings:
     FOCAL_LENGTH_Y = 250.0
     CAM_WIDTH    = 320
     CAM_HEIGHT   = 240
-    CAMERA_HEIGHT_METERS = 1.2
+    CAMERA_HEIGHT_METERS = 0.45
 
     # ── TOF depth detection ───────────────────────────────────────
     TOF_MIN_DEPTH = 0.1    # meters — minimum distance
-    TOF_MAX_DEPTH = 2.0    # meters — maximum distance
+    TOF_MAX_DEPTH = 3    # meters — maximum distance
     TOF_OBJECT_DEPTH = 1.0 # meters — expected depth range for objects
-    TOF_DEPTH_TOLERANCE = 0.4  # meters — ±tolerance around expected depth
-    MIN_OBJECT_AREA = 1000
+    TOF_DEPTH_TOLERANCE = 0.8  # meters — ±tolerance around expected depth
+    MIN_OBJECT_AREA = 400
 
     # ── Physics ───────────────────────────────────────────────────
     GRAVITY          = 9.81    # m/s²
@@ -42,7 +42,7 @@ class SimSettings:
     # ── Throw parameters ──────────────────────────────────────────
     THROW_X_RANGE   = (-0.5,  0.5)
     THROW_Z_MIN     = 1.0
-    THROW_Z_MAX     = 1.9
+    THROW_Z_MAX     = 2.2
     THROW_VX_RANGE  = (-2.8,  2.8)
     THROW_VZ_UP     = (0.3,   2.2)
     BALL_RADIUS     = 0.06
@@ -59,10 +59,10 @@ class SimSettings:
     CAN_MAX_SPEED = 0.8    # m/s  — must exceed max needed speed
     CAN_ACCEL     = 8.0   # m/s²
     CAN_DECEL     = 18.0   # m/s²
-    POSITION_TOL  = 0.01   # m — dead zone
+    POSITION_TOL  = 0.08   # m — dead zone
 
     # ── PID gains ─────────────────────────────────────────────────
-    PID_KP = 4
+    PID_KP = 1
     PID_KI = 0.05
     PID_KD = 0.1
 
@@ -71,4 +71,4 @@ class SimSettings:
     KALMAN_R = 0.004  # measurement noise
 
     # ── Predictor ─────────────────────────────────────────────────
-    MIN_POINTS_TO_PREDICT = 4   # frames before prediction starts
+    MIN_POINTS_TO_PREDICT = 2   # frames before prediction starts
