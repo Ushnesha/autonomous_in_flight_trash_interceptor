@@ -1,0 +1,21 @@
+import time
+from gpiozero import Motor
+
+# Setup - matching your handwritten notes
+fr = Motor(5, 6)
+fl = Motor(19, 26)
+bl = Motor(17, 18)
+br = Motor(22, 23)
+
+def stop_all():
+    fr.stop(); fl.stop(); bl.stop(); br.stop()
+
+print("Testing FORWARD for all wheels...")
+fl.forward(0.5)
+fr.forward(0.5)
+bl.forward(0.5)
+br.forward(0.5)
+
+time.sleep(2)  # Run for 2 seconds
+stop_all()
+print("Test complete.")

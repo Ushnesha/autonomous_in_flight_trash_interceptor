@@ -1,84 +1,83 @@
-"""
-src/camera_real.py
-Real Pi Camera capture using OpenCV for Raspberry Pi 5.
-Replaces src/sim_camera.py for real hardware deployment.
-
-Supports:
-  - libcamera backend (preferred for Pi 5)
-  - Fallback to legacy camera interface
-"""
-
-import cv2
 import numpy as np
-import time
-
+import ArducamDepthCamera as ac
 
 class RealCamera:
-    """Real Pi Camera capture using OpenCV"""
-
     def __init__(self, settings):
         self.S = settings
-        self.cap = None
+        self.cam = None
+        self.frame_count = 0
+        self.valid_count = 0
         self._init_camera()
-
-        if self.cap is None:
-            raise RuntimeError("[CAMERA] Failed to initialize camera")
-
-        # Warm up camera (discard first frames to stabilize)
-        for _ in range(10):
-            self.cap.read()
-
-        print("[CAMERA] Real Pi Camera initialized (640x480 @ 30fps)")
+        if self.cam is None:
+            raise RuntimeError("[CAMERA] Failed to initialize")
+        print("[CAMERA] Warming up sensor...")
+        for i in range(10):
+            f = self.get_frame()
+            if f is not None:
+                valid = np.sum(f > 0)
+                print(f"[CAMERA] Warmup {i+1}: {valid} valid pixels")
+        print("[CAMERA] ArduCAM TOF ready!")
 
     def _init_camera(self):
-        """Initialize camera with libcamera backend, fallback to legacy"""
         try:
-            # Try libcamera backend (preferred for Pi 5)
-            self.cap = cv2.VideoCapture(
-                "libcamerasrc ! video/x-raw,width=640,height=480 ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink",
-                cv2.CAP_GSTREAMER
-            )
-            if self.cap.isOpened():
-                print("[CAMERA] Using libcamera backend")
-                return
+            self.cam = ac.ArducamCamera()
+            ret = self.cam.open(ac.Connection.CSI, 0)
+            print(f"[CAMERA] Open: {ret}")
+            ret = self.cam.start(ac.FrameType.DEPTH)
+            print(f"[CAMERA] Start: {ret}")
+            self.cam.setControl(ac.Control.RANGE, 4000)
+            print("[CAMERA] Initialized successfully")
         except Exception as e:
-            print(f"[CAMERA] libcamera init failed: {e}")
-
-        # Fallback to legacy camera interface
-        try:
-            self.cap = cv2.VideoCapture(0)
-            if self.cap.isOpened():
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
-                print("[CAMERA] Using legacy camera interface")
-                return
-        except Exception as e:
-            print(f"[CAMERA] Legacy camera init failed: {e}")
-
-        self.cap = None
+            print(f"[CAMERA] Error: {e}")
+            self.cam = None
 
     def get_frame(self):
-        """Capture frame from real camera"""
-        if self.cap is None:
+        if self.cam is None:
+            return None
+        try:
+            frame = self.cam.requestFrame(2000)
+            if frame is None:
+                return None
+
+            depth_mm = np.array(frame.depth_data).astype(np.float32)
+            conf = np.array(frame.confidence_data).astype(np.float32)
+            self.cam.releaseFrame(frame)
+
+            self.frame_count += 1
+
+            # Less aggressive filtering - keep more pixels
+            bad = (depth_mm < 50) | (depth_mm > 5000)
+            depth_mm[bad] = 0
+
+            # Convert to meters
+            depth_m = depth_mm / 1000.0
+
+            valid = np.sum(depth_m > 0)
+            self.valid_count += 1
+
+            if self.frame_count % 30 == 0:
+                rate = self.valid_count / self.frame_count * 100
+                print(f"[CAMERA] Frames: {self.frame_count}, Valid: {self.valid_count} ({rate:.1f}%), Last frame: {valid} pixels")
+
+            return depth_m
+
+        except Exception as e:
+            print(f"[CAMERA] Error: {e}")
             return None
 
-        ret, frame = self.cap.read()
-        if not ret:
-            print("[CAMERA] Failed to read frame")
-            return None
-
-        return frame
+    def get_depth_frame(self):
+        return self.get_frame()
 
     def world_to_pixel_x(self, world_x):
-        """Convert world meters to pixel X coordinate"""
         ppm_x = self.S.FRAME_WIDTH / self.S.ARENA_W
-        pixel_x = (world_x + self.S.ARENA_W / 2) * ppm_x
-        return int(pixel_x)
+        return int((world_x + self.S.ARENA_W / 2) * ppm_x)
 
     def cleanup(self):
-        """Release camera resources"""
-        if self.cap is not None:
-            self.cap.release()
-            print("[CAMERA] Camera released")
+        if self.cam is not None:
+            try:
+                self.cam.stop()
+                self.cam.close()
+                print("[CAMERA] Stopped. Valid frame rate: "
+                      f"{self.valid_count/max(self.frame_count,1)*100:.1f}%")
+            except Exception as e:
+                print(f"[CAMERA] Cleanup error: {e}")

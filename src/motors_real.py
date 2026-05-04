@@ -1,88 +1,121 @@
-"""
-src/motors_real.py
-Real L298N motor control for Raspberry Pi 5 + Mecanum chassis.
-Replaces src/sim_motors.py for real hardware deployment.
 
+
+"""
+src/motors_real.py - Using working gpiozero Motor class
 GPIO Pinout:
-  IN1 (GPIO 17)  → Motor A direction
-  IN2 (GPIO 27)  → Motor A direction
-  IN3 (GPIO 22)  → Motor B direction
-  IN4 (GPIO 23)  → Motor B direction
-  ENA (GPIO 12)  → PWM Motor A speed
-  ENB (GPIO 13)  → PWM Motor B speed
-"""
+  BL: forward=17, backward=18
+  BR: forward=22, backward=23
+  FR: forward=5,  backward=6
+  FL: forward=19, backward=26
 
-import RPi.GPIO as GPIO
+NOTE: rotate_right() from mecanum_gpiozero.py = actual strafe right
+      rotate_left()  from mecanum_gpiozero.py = actual strafe left
+"""
+from gpiozero import Motor
+from gpiozero.pins.lgpio import LGPIOFactory
+from gpiozero import Device
 import time
 
+Device.pin_factory = LGPIOFactory(chip=4)
 
 class RealMotors:
-    """Real L298N motor control for Raspberry Pi 5"""
-
     def __init__(self, settings):
         self.S = settings
         self._vx = 0.0
+        self._prev_time = None
         self._target_px = None
         self._integral = 0.0
         self._prev_err = None
         self._ppm_x = settings.FRAME_WIDTH / settings.ARENA_W
+        self.smooth_target_px = settings.FRAME_WIDTH / 2
+        self.current_m = 0.0
 
-        # GPIO pins for L298N
-        self.IN1 = 17   # Motor A direction 1
-        self.IN2 = 27   # Motor A direction 2
-        self.IN3 = 22   # Motor B direction 1
-        self.IN4 = 23   # Motor B direction 2
-        self.ENA = 12   # PWM Motor A (speed)
-        self.ENB = 13   # PWM Motor B (speed)
+        self.front_left  = Motor(forward=19, backward=26)
+        self.front_right = Motor(forward=5, backward=6)
+        self.back_right   = Motor(forward=22, backward=23)
+        self.back_left  = Motor(forward=17, backward=18)
 
-        # Setup GPIO
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup([self.IN1, self.IN2, self.IN3, self.IN4], GPIO.OUT)
-        GPIO.setup([self.ENA, self.ENB], GPIO.OUT)
-
-        # PWM for speed control (1000 Hz frequency)
-        self.pwm_a = GPIO.PWM(self.ENA, 1000)
-        self.pwm_b = GPIO.PWM(self.ENB, 1000)
-        self.pwm_a.start(0)
-        self.pwm_b.start(0)
-
-        print(f"[MOTOR] Real L298N motors initialized")
+        self.stop()
+        print("[MOTOR] Real motors initialized using gpiozero Motor class")
         print(f"[MOTOR] Max speed: {settings.CAN_MAX_SPEED} m/s")
         print(f"[MOTOR] KP={settings.PID_KP} KI={settings.PID_KI} KD={settings.PID_KD}")
 
+    def _strafe_right(self, speed):
+        """Actually moves the robot LEFT physically"""
+        self.front_left.backward(speed)
+        self.front_right.forward(speed)
+        self.back_left.forward(speed)
+        self.back_right.backward(speed)
+
+    def _strafe_left(self, speed):
+        """Actually moves the robot RIGHT physically"""
+        self.front_left.forward(speed)
+        self.front_right.backward(speed)
+        self.back_left.backward(speed)
+        self.back_right.forward(speed)
+
+    def stop(self):
+        self.front_left.stop()
+        self.front_right.stop()
+        self.back_left.stop()
+        self.back_right.stop()
+
+
     def move_to_x(self, target_x_pixels):
-        """Move can to target X using PID control"""
-        self._target_px = target_x_pixels
+        """Move can to target X position using PID control with position estimation"""
+        # 1. Update Timing
+        now = time.time()
+        if self._prev_time is None:
+            dt = 1.0 / 20.0
+        else:
+            dt = now - self._prev_time
+            dt = max(0.001, min(dt, 0.2))
+        self._prev_time = now
+
+        # 2. Smooth and Flip Target
+        self.smooth_target_px = (0.7 * self.smooth_target_px) + (0.3 * target_x_pixels)
+        self._target_px = self.smooth_target_px
+        
+        # --- THE MATH SECTION (Must be before Deadzone) ---
         S = self.S
-        dt = S.SIM_TIMESTEP
+        # Update estimated position
+        self.current_m += self._vx * dt
 
-        # Pixel → world meters
-        target_m = (target_x_pixels / self._ppm_x) - S.ARENA_W / 2
-        # TODO: Get actual position from encoder/IMU instead of assuming center
-        current_m = 0.0
-        error = target_m - current_m
+        # Flip the X coordinate (S.FRAME_WIDTH - pixels) and convert to meters
+        flipped_px = S.FRAME_WIDTH - self._target_px
+        target_m = (flipped_px / self._ppm_x) - S.ARENA_W / 2
+        
+        # Define ERROR here so the deadzone check can see it
+        error = target_m - self.current_m
+        # --------------------------------------------------
 
-        # Dead zone
+        # 3. DEADZONE: Now 'error' is defined!
         if abs(error) < S.POSITION_TOL:
             self._vx = 0.0
             self._integral = 0.0
-            self._apply_velocity(0.0)
+            self._prev_err = None
+            self.stop()
+            print(f"[MOTOR] IN DEADZONE | target={target_m:.3f}m est={self.current_m:.3f}m")
             return
 
-        # PID calculation (same as simulator)
+        """# 4. PID: INTEGRAL (Accumulate error over time)"""
         self._integral += error * dt
+        """# Anti-windup: limit the integral to prevent runaway speed"""
         max_i = S.CAN_MAX_SPEED / max(S.PID_KI, 0.001)
         self._integral = max(-max_i, min(max_i, self._integral))
 
+        """# 5. PID: DERIVATIVE (Rate of change of error)"""
         deriv = 0.0
         if self._prev_err is not None and dt > 0:
             deriv = (error - self._prev_err) / dt
         self._prev_err = error
 
-        cmd = S.PID_KP * error + S.PID_KI * self._integral + S.PID_KD * deriv
+        """# 6. CALCULATE COMMANDED VELOCITY"""
+        cmd = S.PID_KP * error + S.PID_KI * self._integral + S.PID_KD * deriv 
+        """# Limit speed to settings"""
         cmd = max(-S.CAN_MAX_SPEED, min(S.CAN_MAX_SPEED, cmd))
 
-        # Acceleration ramp
+        """ # 7. ACCELERATION LIMITING (Smooths out the movement)"""
         max_delta = S.CAN_ACCEL * dt
         if cmd > self._vx + max_delta:
             cmd = self._vx + max_delta
@@ -92,58 +125,57 @@ class RealMotors:
         self._vx = cmd
         self._apply_velocity(self._vx)
 
+        print(f"[DEBUG] Target_Px: {self._target_px:.1f} | Est_Pos_M: {self.current_m:.3f}m | Error_M: {error:.3f}m")
+
+
+
     def _apply_velocity(self, velocity):
-        """Convert velocity to PWM signals for motors"""
         max_speed = self.S.CAN_MAX_SPEED
-        duty = abs(velocity) / max_speed * 100
-        duty = max(0, min(100, duty))
 
-        if velocity > 0.1:
-            # Strafe right: Motor A forward, Motor B backward
-            GPIO.output(self.IN1, GPIO.HIGH)
-            GPIO.output(self.IN2, GPIO.LOW)
-            GPIO.output(self.IN3, GPIO.LOW)
-            GPIO.output(self.IN4, GPIO.HIGH)
-        elif velocity < -0.1:
-            # Strafe left: Motor A backward, Motor B forward
-            GPIO.output(self.IN1, GPIO.LOW)
-            GPIO.output(self.IN2, GPIO.HIGH)
-            GPIO.output(self.IN3, GPIO.HIGH)
-            GPIO.output(self.IN4, GPIO.LOW)
+        # Calculate raw duty
+        base_duty = abs(velocity) / max_speed
+
+        # ── THE SPEED BOOST ──
+        if abs(velocity) > 0.01:
+            # We jump immediately to 50% power (0.50) if we need to move,
+            # then scale up to 100% (1.0) based on the velocity.
+            duty = max(0.45, min(1.0, base_duty)) 
         else:
-            # Stop all motors
-            GPIO.output(self.IN1, GPIO.LOW)
-            GPIO.output(self.IN2, GPIO.LOW)
-            GPIO.output(self.IN3, GPIO.LOW)
-            GPIO.output(self.IN4, GPIO.LOW)
-            duty = 0
+            duty = 0.0
 
-        self.pwm_a.ChangeDutyCycle(duty)
-        self.pwm_b.ChangeDutyCycle(duty)
+        if velocity > 0.01:
+            self._strafe_right(duty)
+            direction = "RIGHT"
+        elif velocity < -0.01:
+            self._strafe_left(duty)
+            direction = "LEFT"
+        else:
+            self.stop()
+            direction = "STOP"
+            duty = 0.0
+
+        print(f"[MOTOR] {direction} | Raw_Cmd_Vel: {velocity:.3f} | Final_Duty: {duty:.2f}")
 
     def center(self):
-        """Reset to center position"""
-        self._vx = 0.0
-        self._integral = 0.0
-        self._prev_err = None
-        self._apply_velocity(0.0)
+        self.reset()
+        self.stop()
         print("[MOTOR] Centered")
-
-    def stop(self):
-        self._vx = 0.0
-        self._apply_velocity(0.0)
 
     def reset(self):
         self._vx = 0.0
         self._target_px = None
         self._integral = 0.0
         self._prev_err = None
+        self._prev_time = None
+        self.current_m= 0.0
 
     def cleanup(self):
-        """Cleanup GPIO on exit"""
-        self.pwm_a.stop()
-        self.pwm_b.stop()
-        GPIO.cleanup()
+        self.stop()
+        self.front_left.close()
+        self.front_right.close()
+        self.back_left.close()
+        self.back_right.close()
+        print("[MOTOR] GPIO cleaned up")
 
     @property
     def vx(self):
@@ -152,3 +184,4 @@ class RealMotors:
     @property
     def target_px(self):
         return self._target_px
+ 

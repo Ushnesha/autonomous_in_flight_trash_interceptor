@@ -1,7 +1,7 @@
 """
 config/sim_settings.py
 All constants for your hardware:
-  Raspberry Pi 4 | Pi Camera | L298N | Mecanum chassis
+Raspberry Pi 4 | Pi Camera | L298N | Mecanum chassis
 """
 
 class SimSettings:
@@ -12,32 +12,37 @@ class SimSettings:
     FPS      = 60
 
     # ── Real-world arena (meters) ─────────────────────────────────
-    ARENA_W  = 3.0
-    ARENA_H  = 2.5
+    ARENA_W  = 1.5
+    ARENA_H  = 1.0
 
-    # ── Pi Camera v2 ──────────────────────────────────────────────
-    FRAME_WIDTH  = 640
-    FRAME_HEIGHT = 480
-    CAM_WIDTH    = 640
-    CAM_HEIGHT   = 480
+    # ── ArduCAM TOF Camera ────────────────────────────────────────
+    FRAME_WIDTH  = 320
+    FRAME_HEIGHT = 240
+    FOCAL_LENGTH_X = 250.0 
+    FOCAL_LENGTH_Y = 250.0
+    CAM_WIDTH    = 320
+    CAM_HEIGHT   = 240
+    CAMERA_HEIGHT_METERS = 0.45
 
-    # ── HSV detection range (orange ball) ─────────────────────────
-    HSV_LOWER = (3,  70, 70)
-    HSV_UPPER = (30, 255, 255)
-    MIN_OBJECT_AREA = 30
+    # ── TOF depth detection ───────────────────────────────────────
+    TOF_MIN_DEPTH = 0.1    # meters — minimum distance
+    TOF_MAX_DEPTH = 3    # meters — maximum distance
+    TOF_OBJECT_DEPTH = 1.0 # meters — expected depth range for objects
+    TOF_DEPTH_TOLERANCE = 0.8  # meters — ±tolerance around expected depth
+    MIN_OBJECT_AREA = 400
 
     # ── Physics ───────────────────────────────────────────────────
-    GRAVITY          = 9.81    # m/s²
-    AIR_DRAG         = 0.008
+    GRAVITY          = 7.5    # m/s²
+    AIR_DRAG         = 0.02
     BOUNCE           = 0.20
-    FLOOR_Y          = 0.0
+    FLOOR_Y          = 0.06
     SIM_TIMESTEP     = 1.0 / 60
-    PHYSICS_SUBSTEPS = 1
+    PHYSICS_SUBSTEPS = 2
 
     # ── Throw parameters ──────────────────────────────────────────
     THROW_X_RANGE   = (-0.5,  0.5)
     THROW_Z_MIN     = 1.0
-    THROW_Z_MAX     = 1.9
+    THROW_Z_MAX     = 2.2
     THROW_VX_RANGE  = (-2.8,  2.8)
     THROW_VZ_UP     = (0.3,   2.2)
     BALL_RADIUS     = 0.06
@@ -45,25 +50,26 @@ class SimSettings:
     BALL_COLOR_RGBA = (255, 110, 20, 255)   # orange RGBA
 
     # ── Trash can ─────────────────────────────────────────────────
+
     CAN_WIDTH    = 0.38
     CAN_HEIGHT   = 0.50
     CAN_START_X  = 0.0
     CATCH_BONUS_X = 0.10
 
     # ── L298N + Mecanum motors ─────────────────────────────────────
-    CAN_MAX_SPEED = 4.5    # m/s  — must exceed max needed speed
-    CAN_ACCEL     = 22.0   # m/s²
+    CAN_MAX_SPEED = 0.6    # m/s  — must exceed max needed speed
+    CAN_ACCEL     = 8.0   # m/s²
     CAN_DECEL     = 18.0   # m/s²
-    POSITION_TOL  = 0.04   # m — dead zone
+    POSITION_TOL  = 0.001   # m — dead zone
 
     # ── PID gains ─────────────────────────────────────────────────
-    PID_KP = 7.0
-    PID_KI = 0.1
-    PID_KD = 1.0
+    PID_KP = 8
+    PID_KI = 0.05
+    PID_KD = 0.05
 
     # ── Kalman filter ──────────────────────────────────────────────
     KALMAN_Q = 0.05   # process noise
     KALMAN_R = 0.004  # measurement noise
 
     # ── Predictor ─────────────────────────────────────────────────
-    MIN_POINTS_TO_PREDICT = 4   # frames before prediction starts
+    MIN_POINTS_TO_PREDICT = 2   # frames before prediction starts

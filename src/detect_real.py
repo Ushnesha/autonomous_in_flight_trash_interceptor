@@ -1,84 +1,105 @@
-"""
-src/detect_real.py
-Real orange ball detection using OpenCV for Raspberry Pi.
-Replaces src/detect.py for real hardware deployment.
-
-Uses HSV color space filtering with morphological operations.
-"""
-
-import cv2
 import numpy as np
-
-
+import time
+import scipy.ndimage as ndimage
+import cv2
+ 
 class RealDetector:
-    """Real orange ball detection using OpenCV and HSV"""
-
     def __init__(self, settings):
         self.S = settings
-        self.lower = np.array(settings.HSV_LOWER, dtype=np.uint8)
-        self.upper = np.array(settings.HSV_UPPER, dtype=np.uint8)
-        print(f"[DETECT] HSV range: {settings.HSV_LOWER} -> {settings.HSV_UPPER}")
+        self.bg = None
+        self.bg_frames = []
+        self.calibrated = False
+        self.CALIB_FRAMES = 100
+        self.calib_start_time = time.time()
+        
+        # Background subtraction thresholds
+        self.depth_diff_threshold = 0.2   # 8cm closer = new object
+        self.min_object_pixels = 250       # Need 50+ pixels for detection
+        self.max_object_pixels = 1500      # But not more than 3000
+        
+        # Distance filter
+        self.MIN_DEPTH = 0.15
+        self.MAX_DEPTH = 2.0
+        
+        print("[DETECT] === BACKGROUND SUBTRACTION DETECTOR ===")
+        print("[DETECT] Only detects NEW objects appearing")
+        print(f"[DETECT] Depth threshold: {self.depth_diff_threshold*100:.0f}cm")
+        print(f"[DETECT] Min pixels: {self.min_object_pixels}, Max: {self.max_object_pixels}")
+        print(f"[DETECT] Detection range: {self.MIN_DEPTH*100:.0f}cm to {self.MAX_DEPTH*100:.0f}cm")
+        print("[DETECT] Calibrating for 5 seconds...")
+        print("[DETECT] Keep area CLEAR - NO objects!")
+ 
+    def find_object(self, depth_frame):
+        if depth_frame is None:
+            return None
+        depth_frame = cv2.medianBlur(depth_frame.astype(np.float32), 5)
 
-    def find_object(self, frame):
-        """
-        Find orange ball in real camera frame.
-        Returns (cx, cy) pixel center or None.
-        """
-        if frame is None:
+        if not self.calibrated:
+            # ... (keep your existing calibration)
+            self.bg_frames.append(depth_frame.copy())
+            progress = len(self.bg_frames)
+            
+            if progress % 10 == 0: # Faster feedback
+                print(f"[DETECT] Calibrating... {progress}/100")
+            
+            if len(self.bg_frames) >= self.CALIB_FRAMES:
+                # Use nanmedian to ignore 0s/nans if they exist
+                bg_frames_array = np.array(self.bg_frames, dtype=np.float32)
+                # Replace 0 with NaN so they don't mess up the median
+                bg_frames_array[bg_frames_array == 0] = np.nan
+                self.bg = np.nanmedian(bg_frames_array, axis=0)
+                # Fill back NaNs with 0
+                self.bg = np.nan_to_num(self.bg)
+                
+                self.calibrated = True
+                self.bg_frames = []
+                print(f"[DETECT] ✓ CALIBRATION COMPLETE!")
             return None
 
-        # Convert BGR to HSV
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # 1. Create a Diff Mask
+        # Filter out anything further than the background or too close to the sensor
+        diff = self.bg - depth_frame
+        
+        # 2. Binary Masking (The "Sweet Spot")
+        # We only care about objects that are in front of the background 
+        # but not closer than 0.3m (too close to lens)
+        mask = (diff > 0.06) & (depth_frame > self.MIN_DEPTH) & (depth_frame < self.MAX_DEPTH)
+        
+        # 3. Clean up noise (Morphological Opening)
+        # This removes tiny 1-2 pixel noise "speckles"
+        mask = ndimage.binary_opening(mask, structure=np.ones((5,5)))
+        
+        # 4. Label connected components
+        # This identifies "blobs" instead of just counting pixels
+        labeled, num_features = ndimage.label(mask)
+        
+        if num_features > 0:
+            # Find the largest blob (assumed to be the ball)
+            sizes = ndimage.sum(mask, labeled, range(num_features + 1))
+            max_label = np.argmax(sizes)
+            # Check if the largest blob is within size constraints (e.g., 50 to 500 pixels)
+            if self.min_object_pixels < sizes[max_label] < self.max_object_pixels:
+                print(f"[DEBUG] Found blob: size={sizes[max_label]} pixels")
+                # Get center of mass of the largest blob
+                coords = ndimage.center_of_mass(mask, labeled, max_label)
+                cy, cx = coords
+                
+                # Get the median depth of JUST that blob
+                blob_depths = depth_frame[labeled == max_label]
+                avg_depth = np.median(blob_depths)
+                
+                return (int(cx), int(cy), avg_depth)
+                
+        return None
+ 
+    def get_calibration_status(self):
+        if self.calibrated:
+            return "ready"
+        else:
+            return f"calibrating {len(self.bg_frames)}/{self.CALIB_FRAMES}"
 
-        # Create mask based on HSV range
-        mask = cv2.inRange(hsv, self.lower, self.upper)
-
-        # Morphological operations to reduce noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
-            return None
-
-        # Find largest contour (ball)
-        largest = max(contours, key=cv2.contourArea)
-
-        # Check minimum area
-        if cv2.contourArea(largest) < self.S.MIN_OBJECT_AREA:
-            return None
-
-        # Calculate centroid using moments
-        M = cv2.moments(largest)
-        if M["m00"] == 0:
-            return None
-
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-
-        return (cx, cy)
-
-    def find_object_fast(self, frame):
-        """
-        Fast BGR-based detection (alternative, no HSV conversion).
-        Use if performance is critical.
-        """
-        if frame is None:
-            return None
-
-        # Extract BGR channels
-        b = frame[:, :, 0].astype(np.int16)
-        g = frame[:, :, 1].astype(np.int16)
-        r = frame[:, :, 2].astype(np.int16)
-
-        # Orange detection in BGR space
-        orange_mask = (r > 150) & (g > 60) & (g < 180) & (b < 80) & (r > g + 40)
-
-        ys, xs = np.where(orange_mask)
-        if len(xs) < self.S.MIN_OBJECT_AREA:
-            return None
-
-        return int(np.mean(xs)), int(np.mean(ys))
+    def reset_calibration(self):
+        self.bg = None
+        self.bg_frames = []
+        self.calibrated = False
+        print("[DETECT] Recalibrating background for next throw...")
